@@ -1,0 +1,16 @@
+{
+  "id": "zen-space-overview",
+  "name": "Space Overview",
+  "description": "Vue d'ensemble de tous les spaces façon Mission Control : aperçus, navigation au clavier, Entrée pour basculer, filtre par nom ou par onglet.",
+  "author": "Damien Cirotteau",
+  "homepage": "https://github.com/cirotix/zen-space-overview",
+  "version": "1.0.0",
+  "tags": ["workspaces", "spaces", "keyboard", "javascript"],
+  "scripts": {
+    "space-overview.uc.js": {
+      "include": ["chrome://browser/content/browser.xhtml"]
+    }
+  },
+  "preferences": "preferences.json",
+  "supportsUnload": true
+}

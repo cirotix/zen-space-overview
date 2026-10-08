@@ -1,0 +1,21 @@
+[
+  {
+    "type": "string",
+    "property": "zen.space-overview.shortcut",
+    "label": "Raccourci d'ouverture (ex. Ctrl+Alt+W, Ctrl+Shift+Space, Alt+F1)",
+    "placeholder": "Ctrl+Alt+W",
+    "defaultValue": "Ctrl+Alt+W"
+  },
+  {
+    "type": "checkbox",
+    "property": "zen.space-overview.thumbnails",
+    "label": "Afficher un aperçu de la page de chaque space",
+    "defaultValue": true
+  },
+  {
+    "type": "checkbox",
+    "property": "zen.space-overview.animations",
+    "label": "Animation de zoom (désactivée aussi si le système demande moins d'animations)",
+    "defaultValue": true
+  }
+]
