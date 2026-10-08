@@ -10,6 +10,7 @@ choisis au clavier et `Entrée` zoome dans le space choisi.
 | --- | --- |
 | `Ctrl`+`Alt`+`W` | Ouvrir / fermer la vue d'ensemble (configurable) |
 | `←` `↑` `→` `↓`, `Tab` | Se déplacer dans la grille |
+| `Alt`+flèches (ou `Maj`+flèches) | Déplacer le space sélectionné dans l'ordre |
 | `Entrée` ou `Espace` | Ouvrir le space sélectionné |
 | `1` … `9`, `0` | Ouvrir directement le space n° 1 à 10 |
 | Taper du texte | Filtrer par nom de space ou par titre/URL d'onglet |
@@ -21,6 +22,13 @@ cet onglet et `Entrée` ouvre le space directement sur lui. Ça sert aussi de re
 d'onglets à travers tous les spaces.
 
 La souris marche aussi : clic sur une carte pour l'ouvrir, clic sur le fond pour fermer.
+
+## Réordonner les spaces
+
+Glisse une carte à sa nouvelle place, ou sélectionne-la et utilise `Alt`+flèches. Le
+nouvel ordre est celui de Zen : la barre latérale, les numéros des raccourcis « Switch to
+Workspace » et les autres fenêtres suivent. Le réordonnancement est désactivé pendant un
+filtre, car les positions affichées ne correspondent alors plus à l'ordre complet.
 
 ## Aperçus
 

@@ -2,7 +2,7 @@
 // @name            Zen Space Overview
 // @description     Vue d'ensemble de tous les spaces de Zen, façon Mission Control, pilotable au clavier.
 // @include         main
-// @version         1.0.0
+// @version         1.1.0
 // ==/UserScript==
 
 /* Space Overview for Zen Browser
@@ -10,7 +10,8 @@
  * Raccourci (par défaut Ctrl+Alt+W) : affiche tous les spaces dans une grille
  * avec un aperçu de leur dernier onglet. Flèches pour naviguer, Entrée pour
  * ouvrir, 1-9 pour un accès direct, taper du texte pour filtrer (nom du space
- * ou titre d'un onglet), Échap pour fermer.
+ * ou titre d'un onglet), Échap pour fermer. Alt+flèches ou glisser une carte
+ * pour réordonner les spaces.
  *
  * Chargé par Sine (ou fx-autoconfig) dans chaque fenêtre du navigateur.
  * Repose sur l'API interne de Zen (gZenWorkspaces), écrit de façon défensive
@@ -55,6 +56,7 @@
           emptySpace: "Space vide",
           hints: [
             ["← ↑ → ↓", "naviguer"],
+            ["Alt + flèches", "déplacer"],
             ["Entrée", "ouvrir"],
             ["1–9", "accès direct"],
             ["abc", "filtrer"],
@@ -70,6 +72,7 @@
           emptySpace: "Empty space",
           hints: [
             ["← ↑ → ↓", "navigate"],
+            ["Alt + arrows", "move"],
             ["Enter", "open"],
             ["1–9", "jump"],
             ["abc", "filter"],
@@ -352,6 +355,16 @@
         gBrowser.selectedTab = tab;
       }
     },
+
+    canReorder() {
+      return typeof this.spaces?.reorderWorkspace === "function";
+    },
+
+    // Same call the sidebar uses for its own drag and drop: updates every
+    // window and the saved session.
+    async reorder(uuid, index) {
+      await this.spaces.reorderWorkspace(uuid, index);
+    },
   };
 
   // ---------------------------------------------------------------------------
@@ -442,15 +455,30 @@
   scrollbar-width: thin;
 }
 #${ID} .zso-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 9px;
   min-width: 0;
   cursor: pointer;
+  touch-action: none;
   transition: transform 140ms ease;
 }
 #${ID} .zso-card[selected] {
   transform: translateY(-3px) scale(1.025);
+}
+#${ID}[reordering],
+#${ID}[reordering] .zso-card {
+  cursor: grabbing;
+}
+#${ID} .zso-card[dragging] {
+  z-index: 5;
+  transition: none;
+}
+#${ID} .zso-card[dragging] .zso-thumb {
+  box-shadow:
+    0 0 0 3px var(--zso-accent),
+    0 26px 60px rgba(0, 0, 0, 0.55);
 }
 #${ID} .zso-thumb {
   position: relative;
@@ -673,6 +701,10 @@
     #switching = false;
     #pointerOrigin = null;
     #pointerArmed = false;
+
+    #drag = null; // pointer drag in progress (reordering)
+    #suppressClick = false;
+    #reorderChain = Promise.resolve();
 
     #thumbs = new Map(); // uuid -> { bitmap }
     #currentFull = null; // full-resolution shot of the page shown when opening
@@ -1059,6 +1091,7 @@
     }
 
     #teardownOverlay() {
+      this.#endDrag({ animate: false });
       this.#detachRuntimeListeners();
       if (this.#currentFull && !this.#isCached(this.#currentFull)) {
         this.#currentFull.close?.();
@@ -1139,6 +1172,17 @@
       root.appendChild(footer);
 
       root.addEventListener("keydown", this.#onKeyDown);
+      root.addEventListener(
+        "click",
+        event => {
+          if (this.#suppressClick) {
+            this.#suppressClick = false;
+            event.stopPropagation();
+            event.preventDefault();
+          }
+        },
+        true
+      );
       root.addEventListener("mousemove", this.#onMouseMove);
       this.#root = root;
     }
@@ -1190,6 +1234,9 @@
         event.stopPropagation();
         this.close({ target: entry, tab: entry.matchTab });
       });
+      card.addEventListener("pointerdown", event => this.#onCardPointerDown(event, entry));
+      // Native image dragging would hijack the pointer.
+      card.addEventListener("dragstart", event => event.preventDefault());
 
       entry.cardEl = card;
       entry.thumbEl = thumb;
@@ -1265,11 +1312,7 @@
         this.#grid.appendChild(el("div", "zso-empty", STRINGS.noResult));
       }
 
-      // Numbers follow what is visible, so 1–9 always match what you see.
-      this.#visible.forEach((entry, i) => {
-        entry.badgeEl.textContent = i < 9 ? String(i + 1) : i === 9 ? "0" : "";
-        entry.badgeEl.hidden = i > 9;
-      });
+      this.#renumber();
 
       const keep = previous ? this.#visible.indexOf(previous) : -1;
       this.#selected = keep >= 0 ? keep : 0;
@@ -1282,6 +1325,14 @@
 
       this.#layout();
       this.#updateSelection();
+    }
+
+    // Numbers follow what is visible, so 1–9 always match what you see.
+    #renumber() {
+      this.#visible.forEach((entry, i) => {
+        entry.badgeEl.textContent = i < 9 ? String(i + 1) : i === 9 ? "0" : "";
+        entry.badgeEl.hidden = i > 9;
+      });
     }
 
     #renderMatch(entry, q) {
@@ -1340,12 +1391,14 @@
       this.#root.style.setProperty("--zso-aspect", String(this.#aspect));
     }
 
-    #updateSelection() {
+    #updateSelection({ scroll = true } = {}) {
       this.#visible.forEach((entry, i) => {
         entry.cardEl.toggleAttribute("selected", i === this.#selected);
       });
-      const current = this.#visible[this.#selected];
-      current?.cardEl.scrollIntoView({ block: "nearest", inline: "nearest" });
+      if (scroll) {
+        const current = this.#visible[this.#selected];
+        current?.cardEl.scrollIntoView({ block: "nearest", inline: "nearest" });
+      }
     }
 
     #move(delta) {
@@ -1385,10 +1438,217 @@
       this.close({ target: entry, tab: entry.matchTab });
     }
 
+    // --- reordering -------------------------------------------------------------
+    // Only without a filter: positions in a filtered grid don't map to Zen's order.
+
+    get #canReorder() {
+      return !this.#query && !this.#opening && !this.#closing && Zen.canReorder();
+    }
+
+    // Moves a card in the grid (model + DOM), animating the cards that shift.
+    // Zen itself is updated separately by #commitOrder.
+    #moveEntry(from, to, exclude = null) {
+      const n = this.#entries.length;
+      if (from === to || from < 0 || to < 0 || from >= n || to >= n) {
+        return false;
+      }
+      const cards = this.#entries.map(e => e.cardEl).filter(card => card !== exclude);
+      const before = new Map(cards.map(card => [card, card.getBoundingClientRect()]));
+
+      const [entry] = this.#entries.splice(from, 1);
+      this.#entries.splice(to, 0, entry);
+      this.#grid.insertBefore(entry.cardEl, this.#entries[to + 1]?.cardEl ?? null);
+      this.#visible = this.#entries.slice();
+      this.#renumber();
+
+      if (this.#animated) {
+        for (const card of cards) {
+          const a = before.get(card);
+          const b = card.getBoundingClientRect();
+          const dx = a.left - b.left;
+          const dy = a.top - b.top;
+          if (dx || dy) {
+            card.animate(
+              [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "translate(0px, 0px)" }],
+              { duration: 200, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)", composite: "add" }
+            );
+          }
+        }
+      }
+      return true;
+    }
+
+    // Zen's reorderWorkspace reads its current order, so calls are chained.
+    #commitOrder(entry) {
+      const index = this.#entries.indexOf(entry);
+      const uuid = entry.uuid;
+      this.#reorderChain = this.#reorderChain
+        .then(() => Zen.reorder(uuid, index))
+        .catch(e => warn("reorder failed", e));
+    }
+
+    #moveSelectedBy(key) {
+      if (!this.#canReorder) {
+        return;
+      }
+      const from = this.#selected;
+      const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -this.#cols, ArrowDown: this.#cols }[key] ?? 0;
+      const to = Math.min(this.#entries.length - 1, Math.max(0, from + step));
+      const entry = this.#entries[from];
+      if (entry && this.#moveEntry(from, to)) {
+        this.#selected = to;
+        this.#updateSelection();
+        this.#commitOrder(entry);
+      }
+    }
+
+    // Layout box of a card, ignoring transforms (drag offset, FLIP, selection).
+    #slotRect(card) {
+      const grid = this.#grid.getBoundingClientRect();
+      return {
+        left: grid.left + this.#grid.clientLeft + card.offsetLeft - this.#grid.scrollLeft,
+        top: grid.top + this.#grid.clientTop + card.offsetTop - this.#grid.scrollTop,
+        width: card.offsetWidth,
+        height: card.offsetHeight,
+      };
+    }
+
+    #onCardPointerDown(event, entry) {
+      if (event.button !== 0 || this.#drag || !this.#canReorder) {
+        return;
+      }
+      const slot = this.#slotRect(entry.cardEl);
+      this.#drag = {
+        entry,
+        pointerId: event.pointerId,
+        x0: event.clientX,
+        y0: event.clientY,
+        grabX: event.clientX - slot.left,
+        grabY: event.clientY - slot.top,
+        fromIndex: this.#entries.indexOf(entry),
+        started: false,
+      };
+      window.addEventListener("pointermove", this.#onDragMove, true);
+      window.addEventListener("pointerup", this.#onDragUp, true);
+      window.addEventListener("pointercancel", this.#onDragUp, true);
+    }
+
+    #onDragMove = event => {
+      const drag = this.#drag;
+      if (!drag || event.pointerId !== drag.pointerId || !this.#root) {
+        return;
+      }
+      if (!drag.started) {
+        const dx = event.clientX - drag.x0;
+        const dy = event.clientY - drag.y0;
+        if (dx * dx + dy * dy < 49) {
+          return; // still a click
+        }
+        drag.started = true;
+        this.#root.setAttribute("reordering", "true");
+        drag.entry.cardEl.setAttribute("dragging", "true");
+        try {
+          drag.entry.cardEl.setPointerCapture(drag.pointerId);
+        } catch {}
+      }
+      event.preventDefault();
+
+      for (const other of this.#entries) {
+        if (other === drag.entry) {
+          continue;
+        }
+        const r = this.#slotRect(other.cardEl);
+        const inside =
+          event.clientX >= r.left &&
+          event.clientX <= r.left + r.width &&
+          event.clientY >= r.top &&
+          event.clientY <= r.top + r.height;
+        if (inside) {
+          const from = this.#entries.indexOf(drag.entry);
+          const to = this.#entries.indexOf(other);
+          if (this.#moveEntry(from, to, drag.entry.cardEl)) {
+            this.#selected = to;
+            // No auto-scroll: the dragged card's offset would drag the grid along.
+            this.#updateSelection({ scroll: false });
+          }
+          break;
+        }
+      }
+
+      const slot = this.#slotRect(drag.entry.cardEl);
+      const x = event.clientX - drag.grabX - slot.left;
+      const y = event.clientY - drag.grabY - slot.top;
+      drag.entry.cardEl.style.transform = `translate(${x}px, ${y}px) scale(1.04)`;
+    };
+
+    #onDragUp = event => {
+      const drag = this.#drag;
+      if (!drag || event.pointerId !== drag.pointerId) {
+        return;
+      }
+      if (drag.started) {
+        // The click that follows the drop must not open the space.
+        this.#suppressClick = true;
+        setTimeout(() => (this.#suppressClick = false), 0);
+      }
+      this.#endDrag();
+    };
+
+    #endDrag({ animate = true } = {}) {
+      const drag = this.#drag;
+      if (!drag) {
+        return;
+      }
+      this.#drag = null;
+      window.removeEventListener("pointermove", this.#onDragMove, true);
+      window.removeEventListener("pointerup", this.#onDragUp, true);
+      window.removeEventListener("pointercancel", this.#onDragUp, true);
+      if (!drag.started) {
+        return;
+      }
+      const card = drag.entry.cardEl;
+      try {
+        card.releasePointerCapture(drag.pointerId);
+      } catch {}
+      this.#root?.removeAttribute("reordering");
+      const dropped = card.style.transform;
+      card.removeAttribute("dragging");
+      card.style.transform = "";
+      if (this.#root) {
+        this.#updateSelection();
+      }
+      if (animate && this.#animated && dropped && card.isConnected) {
+        // Single keyframe: glides from where it was dropped to its slot.
+        card.animate([{ transform: dropped, offset: 0 }], {
+          duration: 180,
+          easing: "cubic-bezier(0.2, 0.8, 0.2, 1)",
+        });
+      }
+      if (this.#entries.indexOf(drag.entry) !== drag.fromIndex) {
+        this.#commitOrder(drag.entry);
+      }
+    }
+
     // --- events -----------------------------------------------------------------
 
     #onKeyDown = event => {
       if (this.#closing) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (this.#drag?.started) {
+        // Esc drops the card where it is; other keys wait for the drop.
+        if (event.key === "Escape") {
+          this.#endDrag();
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      const isArrow = event.key.startsWith("Arrow");
+      if (isArrow && (event.altKey || event.shiftKey) && !event.ctrlKey && !event.metaKey) {
+        this.#moveSelectedBy(event.key);
         event.preventDefault();
         event.stopPropagation();
         return;
@@ -1464,6 +1724,9 @@
     };
 
     #onMouseMove = event => {
+      if (this.#drag?.started) {
+        return;
+      }
       // Ignore the synthetic mousemove fired when the overlay appears under
       // a still pointer: only react once the mouse has really moved.
       if (!this.#pointerArmed) {
